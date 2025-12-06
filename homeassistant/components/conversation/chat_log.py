@@ -39,10 +39,11 @@ current_chat_log: ContextVar[ChatLog | None] = ContextVar(
 
 def _parse_thinking_tags(
     text: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     """Parse and extract <think>...</think> tags from content.
 
-    Returns tuple of (content_without_tags, thinking_content).
+    Returns tuple of (content_without_tags, thinking_content, has_unclosed_tag).
+    has_unclosed_tag indicates if there's an open <think> tag without closing </think>.
     """
     # Pattern to match <think>...</think> tags (non-greedy)
     pattern = r"<think>(.*?)</think>"
@@ -53,10 +54,13 @@ def _parse_thinking_tags(
     # Remove all thinking tags from content
     content_without_tags = re.sub(pattern, "", text, flags=re.DOTALL)
     
+    # Check for unclosed thinking tag
+    has_unclosed_tag = "<think>" in text and text.rfind("<think>") > text.rfind("</think>")
+    
     # Combine all thinking segments
     thinking_content = "".join(thinking_segments)
     
-    return content_without_tags.strip(), thinking_content.strip()
+    return content_without_tags.strip(), thinking_content.strip(), has_unclosed_tag
 
 
 @callback
@@ -558,31 +562,9 @@ class ChatLog:
                                 name=f"llm_tool_{tool_call.id}",
                             )
                 if self.delta_listener:
-                    # Parse thinking tags from content for streaming UI updates
-                    filtered_delta = {
+                    if filtered_delta := {
                         k: v for k, v in assistant_delta.items() if k != "native"
-                    }
-                    if "content" in filtered_delta:
-                        # Check if there are any thinking tags in the accumulated content
-                        parsed_content, parsed_thinking = _parse_thinking_tags(
-                            current_content
-                        )
-                        # Send delta with parsed content and thinking state
-                        thinking_delta: dict[str, Any] = {}
-                        if parsed_thinking:
-                            # Thinking is ongoing
-                            thinking_delta["thinking_content"] = parsed_thinking
-                            thinking_delta["content"] = parsed_content
-                        else:
-                            thinking_delta["content"] = filtered_delta["content"]
-                        
-                        # Include other keys from original delta
-                        for key in filtered_delta:
-                            if key not in thinking_delta:
-                                thinking_delta[key] = filtered_delta[key]
-                        
-                        self.delta_listener(self, thinking_delta)
-                    else:
+                    }:
                         # We do not want to send the native content to the listener
                         # as it is not JSON serializable
                         self.delta_listener(self, filtered_delta)
@@ -597,7 +579,7 @@ class ChatLog:
                 or current_native
             ):
                 # Parse any <think>...</think> tags from content
-                parsed_content, parsed_thinking = _parse_thinking_tags(current_content)
+                parsed_content, parsed_thinking, _ = _parse_thinking_tags(current_content)
                 
                 # Combine parsed thinking with any existing thinking content
                 final_thinking_content = current_thinking_content
@@ -661,7 +643,7 @@ class ChatLog:
             or current_native
         ):
             # Parse any <think>...</think> tags from content
-            parsed_content, parsed_thinking = _parse_thinking_tags(current_content)
+            parsed_content, parsed_thinking, _ = _parse_thinking_tags(current_content)
             
             # Combine parsed thinking with any existing thinking content
             final_thinking_content = current_thinking_content

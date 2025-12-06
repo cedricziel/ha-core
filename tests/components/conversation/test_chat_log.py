@@ -1026,47 +1026,53 @@ async def test_chat_log_subscription(
 def test_parse_thinking_tags() -> None:
     """Test parsing of <think>...</think> tags from content."""
     # Test with no thinking tags
-    content, thinking = _parse_thinking_tags("This is regular content")
+    content, thinking, has_unclosed = _parse_thinking_tags("This is regular content")
     assert content == "This is regular content"
     assert thinking == ""
+    assert has_unclosed is False
 
     # Test with single thinking tag
-    content, thinking = _parse_thinking_tags(
+    content, thinking, has_unclosed = _parse_thinking_tags(
         "Here is my response <think>Let me think about this</think> and the answer is 42"
     )
     assert content == "Here is my response  and the answer is 42"
     assert thinking == "Let me think about this"
+    assert has_unclosed is False
 
     # Test with multiple thinking tags
-    content, thinking = _parse_thinking_tags(
+    content, thinking, has_unclosed = _parse_thinking_tags(
         "<think>First thought</think>Some text<think>Second thought</think>More text"
     )
     assert content == "Some textMore text"
     assert thinking == "First thoughtSecond thought"
+    assert has_unclosed is False
 
     # Test with thinking tag at start
-    content, thinking = _parse_thinking_tags(
+    content, thinking, has_unclosed = _parse_thinking_tags(
         "<think>Initial thinking</think>The answer is clear"
     )
     assert content == "The answer is clear"
     assert thinking == "Initial thinking"
+    assert has_unclosed is False
 
     # Test with thinking tag at end
-    content, thinking = _parse_thinking_tags(
+    content, thinking, has_unclosed = _parse_thinking_tags(
         "The answer is clear<think>Final thought</think>"
     )
     assert content == "The answer is clear"
     assert thinking == "Final thought"
+    assert has_unclosed is False
 
     # Test with nested-like content (not actual nesting, just text)
-    content, thinking = _parse_thinking_tags(
+    content, thinking, has_unclosed = _parse_thinking_tags(
         "<think>I'm thinking about <tags> in content</think>Result"
     )
     assert content == "Result"
     assert thinking == "I'm thinking about <tags> in content"
+    assert has_unclosed is False
 
     # Test with multiline thinking
-    content, thinking = _parse_thinking_tags(
+    content, thinking, has_unclosed = _parse_thinking_tags(
         """<think>
         First line of thinking
         Second line of thinking
@@ -1075,6 +1081,15 @@ def test_parse_thinking_tags() -> None:
     assert content == "Final answer"
     assert "First line of thinking" in thinking
     assert "Second line of thinking" in thinking
+    assert has_unclosed is False
+
+    # Test with unclosed thinking tag
+    content, thinking, has_unclosed = _parse_thinking_tags(
+        "Some content <think>Thinking in progress"
+    )
+    assert content == "Some content <think>Thinking in progress"
+    assert thinking == ""
+    assert has_unclosed is True
 
 
 async def test_streaming_with_thinking_tags(
