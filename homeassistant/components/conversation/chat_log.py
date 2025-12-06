@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 import logging
 from pathlib import Path
+import re
 from typing import Any, Literal, TypedDict, cast
 
 import voluptuous as vol
@@ -34,6 +35,28 @@ LOGGER = logging.getLogger(__name__)
 current_chat_log: ContextVar[ChatLog | None] = ContextVar(
     "current_chat_log", default=None
 )
+
+
+def _parse_thinking_tags(
+    text: str,
+) -> tuple[str, str]:
+    """Parse and extract <think>...</think> tags from content.
+
+    Returns tuple of (content_without_tags, thinking_content).
+    """
+    # Pattern to match <think>...</think> tags (non-greedy)
+    pattern = r"<think>(.*?)</think>"
+    
+    # Find all thinking segments
+    thinking_segments = re.findall(pattern, text, re.DOTALL)
+    
+    # Remove all thinking tags from content
+    content_without_tags = re.sub(pattern, "", text, flags=re.DOTALL)
+    
+    # Combine all thinking segments
+    thinking_content = "".join(thinking_segments)
+    
+    return content_without_tags.strip(), thinking_content.strip()
 
 
 @callback
@@ -535,9 +558,31 @@ class ChatLog:
                                 name=f"llm_tool_{tool_call.id}",
                             )
                 if self.delta_listener:
-                    if filtered_delta := {
+                    # Parse thinking tags from content for streaming UI updates
+                    filtered_delta = {
                         k: v for k, v in assistant_delta.items() if k != "native"
-                    }:
+                    }
+                    if "content" in filtered_delta:
+                        # Check if there are any thinking tags in the accumulated content
+                        parsed_content, parsed_thinking = _parse_thinking_tags(
+                            current_content
+                        )
+                        # Send delta with parsed content and thinking state
+                        thinking_delta: dict[str, Any] = {}
+                        if parsed_thinking:
+                            # Thinking is ongoing
+                            thinking_delta["thinking_content"] = parsed_thinking
+                            thinking_delta["content"] = parsed_content
+                        else:
+                            thinking_delta["content"] = filtered_delta["content"]
+                        
+                        # Include other keys from original delta
+                        for key in filtered_delta:
+                            if key not in thinking_delta:
+                                thinking_delta[key] = filtered_delta[key]
+                        
+                        self.delta_listener(self, thinking_delta)
+                    else:
                         # We do not want to send the native content to the listener
                         # as it is not JSON serializable
                         self.delta_listener(self, filtered_delta)
@@ -551,10 +596,21 @@ class ChatLog:
                 or current_tool_calls
                 or current_native
             ):
+                # Parse any <think>...</think> tags from content
+                parsed_content, parsed_thinking = _parse_thinking_tags(current_content)
+                
+                # Combine parsed thinking with any existing thinking content
+                final_thinking_content = current_thinking_content
+                if parsed_thinking:
+                    if final_thinking_content:
+                        final_thinking_content += "\n" + parsed_thinking
+                    else:
+                        final_thinking_content = parsed_thinking
+                
                 content: AssistantContent | ToolResultContent = AssistantContent(
                     agent_id=agent_id,
-                    content=current_content or None,
-                    thinking_content=current_thinking_content or None,
+                    content=parsed_content or None,
+                    thinking_content=final_thinking_content or None,
                     tool_calls=current_tool_calls or None,
                     native=current_native,
                 )
@@ -604,10 +660,21 @@ class ChatLog:
             or current_tool_calls
             or current_native
         ):
+            # Parse any <think>...</think> tags from content
+            parsed_content, parsed_thinking = _parse_thinking_tags(current_content)
+            
+            # Combine parsed thinking with any existing thinking content
+            final_thinking_content = current_thinking_content
+            if parsed_thinking:
+                if final_thinking_content:
+                    final_thinking_content += "\n" + parsed_thinking
+                else:
+                    final_thinking_content = parsed_thinking
+            
             content = AssistantContent(
                 agent_id=agent_id,
-                content=current_content or None,
-                thinking_content=current_thinking_content or None,
+                content=parsed_content or None,
+                thinking_content=final_thinking_content or None,
                 tool_calls=current_tool_calls or None,
                 native=current_native,
             )
