@@ -15,7 +15,9 @@ from homeassistant.components import websocket_api
 from homeassistant.components.websocket_api import ActiveConnection
 from homeassistant.core import HomeAssistant, callback
 
+from .acl import async_get_acl, async_provision_acl_for_binding, async_remove_acl_entry
 from .adapter import MatterAdapter
+from .binding import async_create_binding, async_delete_binding, async_get_bindings
 from .helpers import MissingNode, get_matter, node_from_ha_device_id
 
 ID = "id"
@@ -38,6 +40,13 @@ def async_register_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_open_commissioning_window)
     websocket_api.async_register_command(hass, websocket_remove_matter_fabric)
     websocket_api.async_register_command(hass, websocket_interview_node)
+    # Binding and ACL commands
+    websocket_api.async_register_command(hass, websocket_get_bindings)
+    websocket_api.async_register_command(hass, websocket_create_binding)
+    websocket_api.async_register_command(hass, websocket_delete_binding)
+    websocket_api.async_register_command(hass, websocket_get_acl)
+    websocket_api.async_register_command(hass, websocket_provision_acl)
+    websocket_api.async_register_command(hass, websocket_remove_acl)
 
 
 def async_get_node(
@@ -330,3 +339,208 @@ async def websocket_interview_node(
     """Interview a node."""
     await matter.matter_client.interview_node(node_id=node.node_id)
     connection.send_result(msg[ID])
+
+
+# --- Binding and ACL WebSocket Commands ---
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "matter/get_bindings",
+        vol.Required(DEVICE_ID): str,
+        vol.Required("endpoint_id"): vol.Coerce(int),
+    }
+)
+@websocket_api.async_response
+@async_handle_failed_command
+@async_get_matter_adapter
+@async_get_node
+async def websocket_get_bindings(
+    hass: HomeAssistant,
+    connection: ActiveConnection,
+    msg: dict[str, Any],
+    matter: MatterAdapter,
+    node: MatterNode,
+) -> None:
+    """Get bindings for a device endpoint."""
+    bindings = await async_get_bindings(hass, node.node_id, msg["endpoint_id"])
+    connection.send_result(msg[ID], [b.to_dict() for b in bindings])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "matter/create_binding",
+        vol.Required(DEVICE_ID): str,
+        vol.Required("endpoint_id"): vol.Coerce(int),
+        vol.Required("cluster_id"): vol.Coerce(int),
+        vol.Required("target_device_id"): str,
+        vol.Required("target_endpoint_id"): vol.Coerce(int),
+        vol.Optional("verify", default=True): bool,
+        vol.Optional("provision_acl", default=True): bool,
+    }
+)
+@websocket_api.async_response
+@async_handle_failed_command
+@async_get_matter_adapter
+@async_get_node
+async def websocket_create_binding(
+    hass: HomeAssistant,
+    connection: ActiveConnection,
+    msg: dict[str, Any],
+    matter: MatterAdapter,
+    node: MatterNode,
+) -> None:
+    """Create a binding from source device to target device."""
+    # Resolve target device_id to node
+    target_node = node_from_ha_device_id(hass, msg["target_device_id"])
+    if not target_node:
+        raise MissingNode(
+            f"Could not resolve target Matter node from device id {msg['target_device_id']}"
+        )
+
+    result = await async_create_binding(
+        hass=hass,
+        source_node_id=node.node_id,
+        source_endpoint_id=msg["endpoint_id"],
+        cluster_id=msg["cluster_id"],
+        target_node_id=target_node.node_id,
+        target_endpoint_id=msg["target_endpoint_id"],
+        verify=msg.get("verify", True),
+        provision_acl=msg.get("provision_acl", True),
+    )
+    connection.send_result(msg[ID], result.to_dict())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "matter/delete_binding",
+        vol.Required(DEVICE_ID): str,
+        vol.Required("endpoint_id"): vol.Coerce(int),
+        vol.Required("cluster_id"): vol.Coerce(int),
+        vol.Required("target_device_id"): str,
+        vol.Required("target_endpoint_id"): vol.Coerce(int),
+        vol.Optional("verify", default=True): bool,
+    }
+)
+@websocket_api.async_response
+@async_handle_failed_command
+@async_get_matter_adapter
+@async_get_node
+async def websocket_delete_binding(
+    hass: HomeAssistant,
+    connection: ActiveConnection,
+    msg: dict[str, Any],
+    matter: MatterAdapter,
+    node: MatterNode,
+) -> None:
+    """Delete a binding from source device."""
+    # Resolve target device_id to node
+    target_node = node_from_ha_device_id(hass, msg["target_device_id"])
+    if not target_node:
+        raise MissingNode(
+            f"Could not resolve target Matter node from device id {msg['target_device_id']}"
+        )
+
+    result = await async_delete_binding(
+        hass=hass,
+        source_node_id=node.node_id,
+        source_endpoint_id=msg["endpoint_id"],
+        cluster_id=msg["cluster_id"],
+        target_node_id=target_node.node_id,
+        target_endpoint_id=msg["target_endpoint_id"],
+        verify=msg.get("verify", True),
+    )
+    connection.send_result(msg[ID], result.to_dict())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "matter/get_acl",
+        vol.Required(DEVICE_ID): str,
+    }
+)
+@websocket_api.async_response
+@async_handle_failed_command
+@async_get_matter_adapter
+@async_get_node
+async def websocket_get_acl(
+    hass: HomeAssistant,
+    connection: ActiveConnection,
+    msg: dict[str, Any],
+    matter: MatterAdapter,
+    node: MatterNode,
+) -> None:
+    """Get ACL entries for a device."""
+    acl_entries = await async_get_acl(hass, node.node_id)
+    connection.send_result(msg[ID], [e.to_dict() for e in acl_entries])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "matter/provision_acl",
+        vol.Required(DEVICE_ID): str,
+        vol.Required("source_device_id"): str,
+        vol.Required("endpoint_id"): vol.Coerce(int),
+        vol.Required("cluster_id"): vol.Coerce(int),
+    }
+)
+@websocket_api.async_response
+@async_handle_failed_command
+@async_get_matter_adapter
+@async_get_node
+async def websocket_provision_acl(
+    hass: HomeAssistant,
+    connection: ActiveConnection,
+    msg: dict[str, Any],
+    matter: MatterAdapter,
+    node: MatterNode,
+) -> None:
+    """Provision an ACL entry on target device for source device."""
+    # Resolve source device_id to node
+    source_node = node_from_ha_device_id(hass, msg["source_device_id"])
+    if not source_node:
+        raise MissingNode(
+            f"Could not resolve source Matter node from device id {msg['source_device_id']}"
+        )
+
+    result = await async_provision_acl_for_binding(
+        hass=hass,
+        source_node_id=source_node.node_id,
+        target_node_id=node.node_id,
+        target_endpoint_id=msg["endpoint_id"],
+        cluster_id=msg["cluster_id"],
+    )
+    connection.send_result(msg[ID], result.to_dict())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "matter/remove_acl",
+        vol.Required(DEVICE_ID): str,
+        vol.Required("entry_index"): vol.Coerce(int),
+    }
+)
+@websocket_api.async_response
+@async_handle_failed_command
+@async_get_matter_adapter
+@async_get_node
+async def websocket_remove_acl(
+    hass: HomeAssistant,
+    connection: ActiveConnection,
+    msg: dict[str, Any],
+    matter: MatterAdapter,
+    node: MatterNode,
+) -> None:
+    """Remove an ACL entry from a device."""
+    result = await async_remove_acl_entry(
+        hass=hass,
+        node_id=node.node_id,
+        entry_index=msg["entry_index"],
+    )
+    connection.send_result(msg[ID], result.to_dict())
