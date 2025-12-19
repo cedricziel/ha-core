@@ -213,7 +213,7 @@ class MatterACLEntry:
     """
 
     privilege: int  # 1=View, 2=ProxyView, 3=Operate, 4=Manage, 5=Administer
-    auth_mode: int  # 1=PASE, 2=CASE, 3=Group
+    auth_mode: int  # 1=PASE, 2=CASE, 3=Group  # codespell:ignore pase
     subjects: list[int]  # Node IDs or Group IDs (empty = all matching authMode)
     targets: list[MatterACLTarget]  # Restrictions (empty = all endpoints/clusters)
     fabric_index: int
@@ -227,7 +227,7 @@ class MatterACLEntry:
             4: "Manage",
             5: "Administer",
         }
-        auth_mode_names = {1: "PASE", 2: "CASE", 3: "Group"}
+        auth_mode_names = {1: "PASE", 2: "CASE", 3: "Group"}  # codespell:ignore pase
         return {
             "privilege": self.privilege,
             "privilege_name": privilege_names.get(

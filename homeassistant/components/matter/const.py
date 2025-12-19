@@ -33,7 +33,7 @@ ACL_PRIVILEGE_MANAGE = 4
 ACL_PRIVILEGE_ADMINISTER = 5
 
 # ACL Auth modes (from Matter spec)
-ACL_AUTH_MODE_PASE = 1
+ACL_AUTH_MODE_PASE = 1  # codespell:ignore pase
 ACL_AUTH_MODE_CASE = 2
 ACL_AUTH_MODE_GROUP = 3
 
