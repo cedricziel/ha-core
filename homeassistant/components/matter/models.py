@@ -154,7 +154,7 @@ class MatterDiscoverySchema:
     secondary_value_is_not: Any = UNSET
 
 
-# --- Binding and ACL Models (ported from matter_binding_helper) ---
+# --- Binding and ACL Models ---
 
 
 @dataclass

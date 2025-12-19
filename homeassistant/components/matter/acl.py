@@ -1,7 +1,4 @@
-"""Access Control List (ACL) operations for Matter devices.
-
-Ported from matter_binding_helper custom integration.
-"""
+"""Access Control List (ACL) operations for Matter devices."""
 
 from __future__ import annotations
 

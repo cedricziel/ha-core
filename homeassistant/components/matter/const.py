@@ -16,7 +16,7 @@ ID_TYPE_SERIAL = "serial"
 
 FEATUREMAP_ATTRIBUTE_ID = 65532
 
-# --- Binding and ACL Constants (ported from matter_binding_helper) ---
+# --- Binding and ACL Constants ---
 
 # Cluster IDs
 CLUSTER_BINDING = 0x001E  # 30

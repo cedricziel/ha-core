@@ -1,7 +1,4 @@
-"""Binding operations for Matter devices.
-
-Ported from matter_binding_helper custom integration.
-"""
+"""Binding operations for Matter devices."""
 
 from __future__ import annotations
 
