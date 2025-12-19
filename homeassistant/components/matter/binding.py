@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from homeassistant.core import HomeAssistant
 
@@ -57,8 +57,10 @@ async def async_get_bindings(
             attribute_path=attribute_path,
         )
 
-        if result and isinstance(result, list):
-            bindings = _parse_binding_value(node_id, endpoint_id, result)
+        # Cast to Any for runtime type check - read_attribute can return various types
+        result_any = cast(Any, result)
+        if result_any and isinstance(result_any, list):
+            bindings = _parse_binding_value(node_id, endpoint_id, result_any)
 
     except Exception as err:  # noqa: BLE001
         _LOGGER.error(

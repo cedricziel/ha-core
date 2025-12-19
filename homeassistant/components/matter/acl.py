@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from homeassistant.core import HomeAssistant
 
@@ -59,8 +59,10 @@ async def async_get_acl(hass: HomeAssistant, node_id: int) -> list[MatterACLEntr
             attribute_path=attribute_path,
         )
 
-        if result and isinstance(result, list):
-            for entry in result:
+        # Cast to Any for runtime type check - read_attribute can return various types
+        result_any = cast(Any, result)
+        if result_any and isinstance(result_any, list):
+            for entry in result_any:
                 acl_entry = _parse_acl_entry(entry)
                 if acl_entry:
                     acl_entries.append(acl_entry)
