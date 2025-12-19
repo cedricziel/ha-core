@@ -152,3 +152,132 @@ class MatterDiscoverySchema:
     # [optional] the secondary (required) attribute value must NOT have this value
     # for example to filter out empty lists in list sensor values
     secondary_value_is_not: Any = UNSET
+
+
+# --- Binding and ACL Models (ported from matter_binding_helper) ---
+
+
+@dataclass
+class MatterBindingEntry:
+    """Represents a Matter binding entry.
+
+    Bindings are device-to-device communication links stored in the
+    Binding cluster (0x001E) on the source device.
+    """
+
+    source_node_id: int
+    source_endpoint_id: int
+    cluster_id: int
+    target_node_id: int | None = None
+    target_endpoint_id: int | None = None
+    target_group_id: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for API responses."""
+        return {
+            "source_node_id": self.source_node_id,
+            "source_endpoint_id": self.source_endpoint_id,
+            "cluster_id": self.cluster_id,
+            "target_node_id": self.target_node_id,
+            "target_endpoint_id": self.target_endpoint_id,
+            "target_group_id": self.target_group_id,
+        }
+
+
+@dataclass
+class MatterACLTarget:
+    """Represents an ACL target restriction.
+
+    Targets restrict which endpoints/clusters an ACL entry applies to.
+    """
+
+    cluster: int | None = None
+    endpoint: int | None = None
+    device_type: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for API responses."""
+        return {
+            "cluster": self.cluster,
+            "endpoint": self.endpoint,
+            "device_type": self.device_type,
+        }
+
+
+@dataclass
+class MatterACLEntry:
+    """Represents a Matter Access Control List entry.
+
+    ACL entries are stored in the AccessControl cluster (0x001F) on endpoint 0
+    and control which nodes can communicate with the device.
+    """
+
+    privilege: int  # 1=View, 2=ProxyView, 3=Operate, 4=Manage, 5=Administer
+    auth_mode: int  # 1=PASE, 2=CASE, 3=Group
+    subjects: list[int]  # Node IDs or Group IDs (empty = all matching authMode)
+    targets: list[MatterACLTarget]  # Restrictions (empty = all endpoints/clusters)
+    fabric_index: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for API responses."""
+        privilege_names = {
+            1: "View",
+            2: "ProxyView",
+            3: "Operate",
+            4: "Manage",
+            5: "Administer",
+        }
+        auth_mode_names = {1: "PASE", 2: "CASE", 3: "Group"}
+        return {
+            "privilege": self.privilege,
+            "privilege_name": privilege_names.get(
+                self.privilege, f"Unknown ({self.privilege})"
+            ),
+            "auth_mode": self.auth_mode,
+            "auth_mode_name": auth_mode_names.get(
+                self.auth_mode, f"Unknown ({self.auth_mode})"
+            ),
+            "subjects": self.subjects,
+            "targets": [t.to_dict() for t in self.targets],
+            "fabric_index": self.fabric_index,
+        }
+
+
+@dataclass
+class BindingOperationResult:
+    """Result of a binding operation."""
+
+    success: bool
+    verified: bool  # True if binding was confirmed on device
+    message: str
+    bindings_count: int = 0
+    error_type: str = "success"  # success, permission_denied, device_unavailable, etc.
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for API responses."""
+        return {
+            "success": self.success,
+            "verified": self.verified,
+            "message": self.message,
+            "bindings_count": self.bindings_count,
+            "error_type": self.error_type,
+        }
+
+
+@dataclass
+class ACLProvisioningResult:
+    """Result of an ACL provisioning operation."""
+
+    success: bool
+    message: str
+    acl_entries_count: int = 0
+    error_type: str = "success"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for API responses."""
+        return {
+            "success": self.success,
+            "message": self.message,
+            "acl_entries_count": self.acl_entries_count,
+            "error_type": self.error_type,
+        }
