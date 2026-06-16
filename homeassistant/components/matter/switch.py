@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .entity import MatterEntity, MatterEntityDescription
+from .group import MatterGroupEntity, aggregate_is_on
 from .helpers import MatterConfigEntry
 from .models import MatterDiscoverySchema
 
@@ -79,6 +80,27 @@ class MatterSwitch(MatterEntity, SwitchEntity):
         if self.entity_description.inverted:
             value = not value
         self._attr_is_on = value
+
+
+class MatterGroupSwitch(MatterGroupEntity, SwitchEntity):
+    """Representation of a Matter group as a switch."""
+
+    _watched_attributes = (clusters.OnOff.Attributes.OnOff,)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the group on."""
+        await self.send_group_command(clusters.OnOff.Commands.On())
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the group off."""
+        await self.send_group_command(clusters.OnOff.Commands.Off())
+
+    @callback
+    def _update_from_members(self) -> None:
+        """Aggregate the on state across members."""
+        self._attr_is_on = aggregate_is_on(
+            self._member_values(clusters.OnOff.Attributes.OnOff)
+        )
 
 
 class MatterGenericCommandSwitch(MatterSwitch):

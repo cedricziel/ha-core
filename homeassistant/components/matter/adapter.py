@@ -13,6 +13,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, ID_TYPE_DEVICE_ID, ID_TYPE_SERIAL, LOGGER
 from .discovery import async_discover_entities
+from .group import MatterGroup
+from .group_discovery import async_discover_group
 from .helpers import MatterConfigEntry, get_device_id
 
 if TYPE_CHECKING:
@@ -43,6 +45,7 @@ class MatterAdapter:
         self.config_entry = config_entry
         self.platform_handlers: dict[Platform, AddEntitiesCallback] = {}
         self.discovered_entities: set[str] = set()
+        self.discovered_groups: set[int] = set()
 
     def register_platform_handler(
         self, platform: Platform, add_entities: AddEntitiesCallback
@@ -129,6 +132,43 @@ class MatterAdapter:
                 callback=node_updated_callback, event_filter=EventType.NODE_UPDATED
             )
         )
+
+    async def setup_groups(self) -> None:
+        """Set up Matter groups and subscribe to group lifecycle events.
+
+        Group support requires a Matter server/client that exposes the group
+        API. When it is unavailable we skip group setup so older servers keep
+        working unchanged.
+        """
+        if not hasattr(self.matter_client, "get_groups"):
+            LOGGER.debug("Matter server does not support groups; skipping group setup")
+            return
+
+        for group in await self.matter_client.get_groups():
+            self._setup_group(group)
+
+        def group_added_callback(event: EventType, group: MatterGroup) -> None:
+            """Handle group added event."""
+            self._setup_group(group)
+
+        self.config_entry.async_on_unload(
+            self.matter_client.subscribe_events(
+                callback=group_added_callback, event_filter=EventType.GROUP_ADDED
+            )
+        )
+
+    def _setup_group(self, group: MatterGroup) -> None:
+        """Create the entity for a single Matter group."""
+        if group.group_id in self.discovered_groups:
+            return
+        result = async_discover_group(self.matter_client, group)
+        if result is None:
+            LOGGER.debug("No supported platform for Matter group %s", group.group_id)
+            return
+        platform, entity = result
+        LOGGER.debug("Creating %s entity for group %s", platform, group.group_id)
+        self.discovered_groups.add(group.group_id)
+        self.platform_handlers[platform]([entity])
 
     def _setup_node(self, node: MatterNode) -> None:
         """Set up an node."""
