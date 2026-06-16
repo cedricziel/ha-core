@@ -28,6 +28,7 @@ from homeassistant.util import color as color_util
 
 from .const import LOGGER
 from .entity import MatterEntity, MatterEntityDescription
+from .group import MatterGroupEntity, aggregate_is_on, aggregate_mean, first_present
 from .helpers import MatterConfigEntry
 from .models import MatterDiscoverySchema
 from .util import (
@@ -466,6 +467,201 @@ class MatterLight(MatterEntity, LightEntity):
                 device_info.hardwareVersionString,
                 device_info.softwareVersionString,
             )
+
+
+class MatterGroupLight(MatterGroupEntity, LightEntity):
+    """Representation of a Matter group as a light.
+
+    Commands are sent to the group via multicast; reported state is aggregated
+    from the individual members (on if any member is on, mean brightness, color
+    from the first member reporting it).
+    """
+
+    _attr_min_color_temp_kelvin = DEFAULT_MIN_KELVIN
+    _attr_max_color_temp_kelvin = DEFAULT_MAX_KELVIN
+    _watched_attributes = (
+        clusters.OnOff.Attributes.OnOff,
+        clusters.LevelControl.Attributes.CurrentLevel,
+        clusters.ColorControl.Attributes.ColorMode,
+        clusters.ColorControl.Attributes.CurrentHue,
+        clusters.ColorControl.Attributes.CurrentSaturation,
+        clusters.ColorControl.Attributes.CurrentX,
+        clusters.ColorControl.Attributes.CurrentY,
+        clusters.ColorControl.Attributes.ColorTemperatureMireds,
+    )
+
+    @staticmethod
+    def _endpoint_color_modes(endpoint: Any) -> set[ColorMode]:
+        """Return the color modes a single member endpoint supports."""
+        modes: set[ColorMode] = {ColorMode.ONOFF}
+        if endpoint.has_attribute(
+            None, clusters.LevelControl.Attributes.CurrentLevel
+        ) and endpoint.device_types != {device_types.OnOffLight}:
+            modes.add(ColorMode.BRIGHTNESS)
+        capabilities = endpoint.get_attribute_value(
+            None, clusters.ColorControl.Attributes.ColorCapabilities
+        )
+        if capabilities is not None:
+            color_caps = clusters.ColorControl.Bitmaps.ColorCapabilitiesBitmap
+            if capabilities & color_caps.kHueSaturation:
+                modes.add(ColorMode.HS)
+            if capabilities & color_caps.kXy:
+                modes.add(ColorMode.XY)
+            if capabilities & color_caps.kColorTemperature:
+                modes.add(ColorMode.COLOR_TEMP)
+        return modes
+
+    def _member_brightness(self, member: Any) -> int | None:
+        """Return a member's brightness in the 0-255 range."""
+        level_control = member.get_cluster(clusters.LevelControl)
+        if level_control is None or level_control.currentLevel in (None, NullValue):
+            return None
+        return round(
+            renormalize(
+                level_control.currentLevel,
+                (level_control.minLevel or 1, level_control.maxLevel or 254),
+                (0, 255),
+            )
+        )
+
+    async def _set_brightness(self, brightness: int, transition: float = 0.0) -> None:
+        """Set group brightness using the standard Matter level range."""
+        level = round(renormalize(brightness, (0, 255), (1, 254)))
+        await self.send_group_command(
+            clusters.LevelControl.Commands.MoveToLevelWithOnOff(
+                level=level,
+                transitionTime=int(transition * 10),
+            )
+        )
+
+    async def _set_hs_color(
+        self, hs_color: tuple[float, float], transition: float = 0.0
+    ) -> None:
+        """Set group hs color."""
+        matter_hs = convert_to_matter_hs(hs_color)
+        await self.send_group_command(
+            clusters.ColorControl.Commands.MoveToHueAndSaturation(
+                hue=int(matter_hs[0]),
+                saturation=int(matter_hs[1]),
+                transitionTime=int(transition * 10),
+                optionsMask=1,
+                optionsOverride=1,
+            )
+        )
+
+    async def _set_xy_color(
+        self, xy_color: tuple[float, float], transition: float = 0.0
+    ) -> None:
+        """Set group xy color."""
+        matter_xy = convert_to_matter_xy(xy_color)
+        await self.send_group_command(
+            clusters.ColorControl.Commands.MoveToColor(
+                colorX=int(matter_xy[0]),
+                colorY=int(matter_xy[1]),
+                transitionTime=int(transition * 10),
+                optionsMask=1,
+                optionsOverride=1,
+            )
+        )
+
+    async def _set_color_temp(
+        self, color_temp_kelvin: int, transition: float = 0.0
+    ) -> None:
+        """Set group color temperature."""
+        color_temp_mired = color_util.color_temperature_kelvin_to_mired(
+            color_temp_kelvin
+        )
+        await self.send_group_command(
+            clusters.ColorControl.Commands.MoveToColorTemperature(
+                colorTemperatureMireds=min(color_temp_mired, MATTER_MAX_MIREDS),
+                transitionTime=int(transition * 10),
+                optionsMask=1,
+                optionsOverride=1,
+            )
+        )
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the group on, optionally setting color/brightness."""
+        hs_color = kwargs.get(ATTR_HS_COLOR)
+        xy_color = kwargs.get(ATTR_XY_COLOR)
+        color_temp_kelvin = kwargs.get(ATTR_COLOR_TEMP_KELVIN)
+        brightness = kwargs.get(ATTR_BRIGHTNESS)
+        transition = kwargs.get(ATTR_TRANSITION, 0)
+        supported_color_modes = self.supported_color_modes or set()
+
+        if hs_color is not None and ColorMode.HS in supported_color_modes:
+            await self._set_hs_color(hs_color, transition)
+        elif xy_color is not None and ColorMode.XY in supported_color_modes:
+            await self._set_xy_color(xy_color, transition)
+        elif (
+            color_temp_kelvin is not None
+            and ColorMode.COLOR_TEMP in supported_color_modes
+        ):
+            await self._set_color_temp(color_temp_kelvin, transition)
+
+        if brightness is not None and supported_color_modes != {ColorMode.ONOFF}:
+            await self._set_brightness(brightness, transition)
+            return
+
+        await self.send_group_command(clusters.OnOff.Commands.On())
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the group off."""
+        await self.send_group_command(clusters.OnOff.Commands.Off())
+
+    @callback
+    def _update_from_members(self) -> None:
+        """Aggregate member state into the group light state."""
+        if self._attr_supported_color_modes is None:
+            modes: set[ColorMode] = set()
+            for member in self._members:
+                modes |= self._endpoint_color_modes(member)
+            self._attr_supported_color_modes = filter_supported_color_modes(
+                modes or {ColorMode.ONOFF}
+            )
+            if self._attr_supported_color_modes != {ColorMode.ONOFF}:
+                self._attr_supported_features |= LightEntityFeature.TRANSITION
+
+        supported = self._attr_supported_color_modes
+        self._attr_is_on = aggregate_is_on(
+            self._member_values(clusters.OnOff.Attributes.OnOff)
+        )
+
+        if supported != {ColorMode.ONOFF}:
+            self._attr_brightness = aggregate_mean(
+                [self._member_brightness(member) for member in self._members]
+            )
+
+        # report color from the first member that publishes it
+        if ColorMode.COLOR_TEMP in supported and (
+            mireds := first_present(
+                self._member_values(
+                    clusters.ColorControl.Attributes.ColorTemperatureMireds
+                )
+            )
+        ):
+            self._attr_color_mode = ColorMode.COLOR_TEMP
+            self._attr_color_temp_kelvin = color_util.color_temperature_mired_to_kelvin(
+                mireds
+            )
+        elif (
+            ColorMode.HS in supported
+            and (
+                hue := first_present(
+                    self._member_values(clusters.ColorControl.Attributes.CurrentHue)
+                )
+            )
+            is not None
+        ):
+            saturation = first_present(
+                self._member_values(clusters.ColorControl.Attributes.CurrentSaturation)
+            )
+            self._attr_color_mode = ColorMode.HS
+            self._attr_hs_color = convert_to_hass_hs((hue, saturation or 0))
+        elif ColorMode.BRIGHTNESS in supported:
+            self._attr_color_mode = ColorMode.BRIGHTNESS
+        else:
+            self._attr_color_mode = ColorMode.ONOFF
 
 
 # Discovery schema(s) to map Matter Attributes to HA entities

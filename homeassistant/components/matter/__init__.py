@@ -209,6 +209,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MatterConfigEntry) -> bo
     try:
         await hass.config_entries.async_forward_entry_setups(entry, SUPPORTED_PLATFORMS)
         await matter.setup_nodes()
+        await matter.setup_groups()
     except Exception as err:  # noqa: BLE001
         # Platform/node setup raised. Cancel the listen task so the cleanup
         # block below tears down the matter client and BLE proxy alongside
