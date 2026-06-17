@@ -23,6 +23,7 @@ from homeassistant.components.conversation.chat_log import (
     DATA_CHAT_LOGS,
     Attachment,
     ChatLogEventType,
+    _parse_thinking_tags,
     async_subscribe_chat_logs,
 )
 from homeassistant.core import Context, HomeAssistant
@@ -1024,3 +1025,134 @@ async def test_chat_log_subscription(
 
     # Verify no new events were received after unsubscribing
     assert len(received_events) == events_before_unsubscribe
+
+
+def test_parse_thinking_tags() -> None:
+    """Test parsing of <think>...</think> tags from content."""
+    # Test with no thinking tags
+    content, thinking, has_unclosed = _parse_thinking_tags("This is regular content")
+    assert content == "This is regular content"
+    assert thinking == ""
+    assert has_unclosed is False
+
+    # Test with single thinking tag
+    content, thinking, has_unclosed = _parse_thinking_tags(
+        "Here is my response <think>Let me think about this</think> and the answer is 42"
+    )
+    assert content == "Here is my response  and the answer is 42"
+    assert thinking == "Let me think about this"
+    assert has_unclosed is False
+
+    # Test with multiple thinking tags
+    content, thinking, has_unclosed = _parse_thinking_tags(
+        "<think>First thought</think>Some text<think>Second thought</think>More text"
+    )
+    assert content == "Some textMore text"
+    assert thinking == "First thoughtSecond thought"
+    assert has_unclosed is False
+
+    # Test with thinking tag at start
+    content, thinking, has_unclosed = _parse_thinking_tags(
+        "<think>Initial thinking</think>The answer is clear"
+    )
+    assert content == "The answer is clear"
+    assert thinking == "Initial thinking"
+    assert has_unclosed is False
+
+    # Test with thinking tag at end
+    content, thinking, has_unclosed = _parse_thinking_tags(
+        "The answer is clear<think>Final thought</think>"
+    )
+    assert content == "The answer is clear"
+    assert thinking == "Final thought"
+    assert has_unclosed is False
+
+    # Test with nested-like content (not actual nesting, just text)
+    content, thinking, has_unclosed = _parse_thinking_tags(
+        "<think>I'm thinking about <tags> in content</think>Result"
+    )
+    assert content == "Result"
+    assert thinking == "I'm thinking about <tags> in content"
+    assert has_unclosed is False
+
+    # Test with multiline thinking
+    content, thinking, has_unclosed = _parse_thinking_tags(
+        """<think>
+        First line of thinking
+        Second line of thinking
+        </think>Final answer"""
+    )
+    assert content == "Final answer"
+    assert "First line of thinking" in thinking
+    assert "Second line of thinking" in thinking
+    assert has_unclosed is False
+
+    # Test with unclosed thinking tag
+    content, thinking, has_unclosed = _parse_thinking_tags(
+        "Some content <think>Thinking in progress"
+    )
+    assert content == "Some content <think>Thinking in progress"
+    assert thinking == ""
+    assert has_unclosed is True
+
+
+async def test_streaming_with_thinking_tags(
+    hass: HomeAssistant, mock_conversation_input: ConversationInput
+) -> None:
+    """Test streaming content that includes thinking tags."""
+
+    async def stream_with_thinking_tags():
+        """Generate a stream with thinking tags."""
+        yield {"role": "assistant"}
+        yield {"content": "<think>I need to "}
+        yield {"content": "analyze this carefully</think>"}
+        yield {"content": "The answer "}
+        yield {"content": "is 42"}
+
+    with (
+        chat_session.async_get_chat_session(hass) as session,
+        async_get_chat_log(hass, session, mock_conversation_input) as chat_log,
+    ):
+        contents = []
+        async for content in chat_log.async_add_delta_content_stream(
+            "test-agent", stream_with_thinking_tags()
+        ):
+            contents.append(content)
+
+        assert len(contents) == 1
+        assert isinstance(contents[0], AssistantContent)
+        assert contents[0].content == "The answer is 42"
+        assert contents[0].thinking_content == "I need to analyze this carefully"
+
+
+async def test_streaming_with_native_thinking_and_tags(
+    hass: HomeAssistant, mock_conversation_input: ConversationInput
+) -> None:
+    """Test streaming with both native thinking_content and thinking tags."""
+
+    async def stream_with_both():
+        """Generate a stream with both native thinking and tags."""
+        yield {"role": "assistant"}
+        yield {"thinking_content": "Native thinking part 1 "}
+        yield {"thinking_content": "Native thinking part 2"}
+        yield {"content": "<think>Tag-based thinking</think>"}
+        yield {"content": "Final answer"}
+
+    with (
+        chat_session.async_get_chat_session(hass) as session,
+        async_get_chat_log(hass, session, mock_conversation_input) as chat_log,
+    ):
+        contents = []
+        async for content in chat_log.async_add_delta_content_stream(
+            "test-agent", stream_with_both()
+        ):
+            contents.append(content)
+
+        assert len(contents) == 1
+        assert isinstance(contents[0], AssistantContent)
+        assert contents[0].content == "Final answer"
+        # Both thinking sources should be combined
+        assert (
+            contents[0].thinking_content
+            == "Native thinking part 1 Native thinking part 2\nTag-based thinking"
+        )

@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 import logging
 from pathlib import Path
+import re
 from typing import Any, Literal, TypedDict, cast
 
 import voluptuous as vol
@@ -32,6 +33,32 @@ LOGGER = logging.getLogger(__name__)
 current_chat_log: ContextVar[ChatLog | None] = ContextVar(
     "current_chat_log", default=None
 )
+
+
+def _parse_thinking_tags(
+    text: str,
+) -> tuple[str, str, bool]:
+    """Parse and extract <think>...</think> tags from content.
+
+    Returns tuple of (content_without_tags, thinking_content, has_unclosed_tag).
+    has_unclosed_tag indicates if there's an open <think> tag without closing </think>.
+    """
+    # Pattern to match <think>...</think> tags (non-greedy)
+    pattern = r"<think>(.*?)</think>"
+    
+    # Find all thinking segments
+    thinking_segments = re.findall(pattern, text, re.DOTALL)
+    
+    # Remove all thinking tags from content
+    content_without_tags = re.sub(pattern, "", text, flags=re.DOTALL)
+    
+    # Check for unclosed thinking tag
+    has_unclosed_tag = "<think>" in text and text.rfind("<think>") > text.rfind("</think>")
+    
+    # Combine all thinking segments
+    thinking_content = "".join(thinking_segments)
+    
+    return content_without_tags.strip(), thinking_content.strip(), has_unclosed_tag
 
 
 @callback
@@ -554,10 +581,21 @@ class ChatLog:
                 or current_tool_calls
                 or current_native
             ):
+                # Parse any <think>...</think> tags from content
+                parsed_content, parsed_thinking, _ = _parse_thinking_tags(current_content)
+                
+                # Combine parsed thinking with any existing thinking content
+                final_thinking_content = current_thinking_content
+                if parsed_thinking:
+                    if final_thinking_content:
+                        final_thinking_content += "\n" + parsed_thinking
+                    else:
+                        final_thinking_content = parsed_thinking
+                
                 content: AssistantContent | ToolResultContent = AssistantContent(
                     agent_id=agent_id,
-                    content=current_content or None,
-                    thinking_content=current_thinking_content or None,
+                    content=parsed_content or None,
+                    thinking_content=final_thinking_content or None,
                     tool_calls=current_tool_calls or None,
                     native=current_native,
                 )
@@ -607,10 +645,21 @@ class ChatLog:
             or current_tool_calls
             or current_native
         ):
+            # Parse any <think>...</think> tags from content
+            parsed_content, parsed_thinking, _ = _parse_thinking_tags(current_content)
+            
+            # Combine parsed thinking with any existing thinking content
+            final_thinking_content = current_thinking_content
+            if parsed_thinking:
+                if final_thinking_content:
+                    final_thinking_content += "\n" + parsed_thinking
+                else:
+                    final_thinking_content = parsed_thinking
+            
             content = AssistantContent(
                 agent_id=agent_id,
-                content=current_content or None,
-                thinking_content=current_thinking_content or None,
+                content=parsed_content or None,
+                thinking_content=final_thinking_content or None,
                 tool_calls=current_tool_calls or None,
                 native=current_native,
             )
